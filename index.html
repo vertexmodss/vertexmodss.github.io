@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vertex Mods • Obter Key</title>
+<meta name="description" content="Vertex Mods - pegue sua key">
+<meta name="theme-color" content="#050805">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg"><div class="brilho"></div><div class="logo-fundo"></div><div class="grade"></div><div class="vinheta"></div></div>
+<canvas id="faiscas"></canvas>
+
+<main>
+  <img class="logo-topo" src="logo.png" alt="Vertex Mods">
+
+  <section class="card">
+    <h1>VERTEX MODS</h1>
+    <p class="sub">Clique no botão e pegue a sua key exclusiva</p>
+
+    <div class="estoque"><span class="ponto" id="ponto"></span><span id="textoEstoque">Carregando estoque...</span></div>
+    <div class="barra"><div id="barra"></div></div>
+
+    <button class="principal" id="btnObter" disabled>OBTER KEY</button>
+
+    <div class="resultado" id="resultado">
+      <div class="rotulo">✔ Sua key</div>
+      <div class="key" id="key">----</div>
+      <button class="copiar" id="btnCopiar">📋 Copiar key</button>
+      <p class="aviso">Essa key é só sua. Guarde ela em um lugar seguro.</p>
+    </div>
+
+    <p class="msg" id="msg"></p>
+  </section>
+
+  <div class="infos">
+    <div class="info"><b>⚡</b><span>Entrega na hora</span></div>
+    <div class="info"><b>🔒</b><span>1 key por pessoa</span></div>
+    <div class="info"><b>🥷</b><span>Vertex Mods</span></div>
+  </div>
+</main>
+
+<footer>© <span id="ano"></span> Vertex Mods</footer>
+
+<script src="config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, onSnapshot, runTransaction, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const $ = (id) => document.getElementById(id);
+$("ano").textContent = new Date().getFullYear();
+
+const btn = $("btnObter");
+const msg = (t, erro) => { $("msg").textContent = t || ""; $("msg").className = "msg" + (erro ? " erro" : ""); };
+
+function mostrarKey(k){
+  $("key").textContent = k;
+  $("resultado").classList.add("on");
+  btn.style.display = "none";
+  msg("");
+  explodir();
+}
+
+$("btnCopiar").onclick = async () => {
+  const k = $("key").textContent;
+  try { await navigator.clipboard.writeText(k); $("btnCopiar").textContent = "✅ Copiada!"; }
+  catch { const r = document.createRange(); r.selectNodeContents($("key")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $("btnCopiar").textContent = "Selecionei, aperte Ctrl+C"; }
+  setTimeout(() => $("btnCopiar").textContent = "📋 Copiar key", 2000);
+};
+
+const cfg = window.FIREBASE_CONFIG || {};
+if (!cfg.apiKey || cfg.apiKey === "COLE_AQUI") {
+  $("textoEstoque").textContent = "Site em configuração";
+  $("ponto").classList.add("off");
+  msg("Falta colar a configuração do Firebase no arquivo config.js", true);
+} else {
+  iniciar();
+}
+
+function iniciar(){
+  const app = initializeApp(cfg);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
+  const contadorRef = doc(db, "estoque", "contador");
+  let livres = 0;
+
+  onSnapshot(contadorRef, (s) => {
+    const d = s.data() || { proximo: 0, total: 0 };
+    livres = Math.max(0, (d.total || 0) - (d.proximo || 0));
+    $("textoEstoque").textContent = livres > 0 ? `${livres} keys disponíveis` : "Estoque esgotado";
+    $("ponto").classList.toggle("off", livres <= 0);
+    $("barra").style.width = d.total ? (livres / d.total * 100) + "%" : "0%";
+    if (btn.style.display !== "none") btn.disabled = livres <= 0 || !auth.currentUser;
+  }, () => { $("textoEstoque").textContent = "Não consegui ver o estoque"; });
+
+  signInAnonymously(auth).catch((e) => msg("Erro ao conectar: " + e.code, true));
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) return;
+    btn.disabled = livres <= 0;
+    // ja pegou antes? mostra a mesma key
+    try {
+      const r = await getDoc(doc(db, "resgates", user.uid));
+      if (r.exists()) {
+        const k = await getDoc(doc(db, "keys", String(r.data().n)));
+        if (k.exists()) mostrarKey(k.data().key);
+      }
+    } catch (e) { console.warn(e); }
+  });
+
+  btn.onclick = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>PEGANDO...';
+    msg("");
+    try {
+      const resgateRef = doc(db, "resgates", user.uid);
+      const n = await runTransaction(db, async (tx) => {
+        const r = await tx.get(resgateRef);
+        if (r.exists()) return r.data().n;
+        const c = await tx.get(contadorRef);
+        const d = c.data();
+        if (!d || d.proximo >= d.total) throw new Error("ESGOTADO");
+        tx.set(resgateRef, { n: d.proximo, em: serverTimestamp() });
+        tx.update(contadorRef, { proximo: d.proximo + 1 });
+        return d.proximo;
+      });
+      const k = await getDoc(doc(db, "keys", String(n)));
+      if (!k.exists()) throw new Error("SEMKEY");
+      mostrarKey(k.data().key);
+    } catch (e) {
+      console.error(e);
+      btn.innerHTML = "OBTER KEY";
+      btn.disabled = livres <= 0;
+      if (e.message === "ESGOTADO") msg("As keys acabaram! Volte mais tarde.", true);
+      else msg("Deu um erro, tente de novo em alguns segundos.", true);
+    }
+  };
+}
+
+/* ---------- faiscas verdes no fundo ---------- */
+const cv = $("faiscas"), cx = cv.getContext("2d");
+let W, H, parts = [];
+function tam(){ W = cv.width = innerWidth * devicePixelRatio; H = cv.height = innerHeight * devicePixelRatio; }
+addEventListener("resize", tam); tam();
+for (let i = 0; i < 60; i++) parts.push(nova(true));
+function nova(inicio){ return { x: Math.random()*W, y: inicio ? Math.random()*H : H + 10, v: (0.3+Math.random()*1.1)*devicePixelRatio, r: (0.6+Math.random()*2)*devicePixelRatio, a: 0.2+Math.random()*0.6, d: (Math.random()-.5)*0.4 }; }
+function explodir(){ for (let i = 0; i < 90; i++){ const p = nova(false); p.x = W/2 + (Math.random()-.5)*W*0.4; p.y = H*0.55; p.v = (2+Math.random()*5)*devicePixelRatio; p.d = (Math.random()-.5)*4; p.a = 1; parts.push(p);} }
+(function loop(){
+  cx.clearRect(0,0,W,H);
+  parts.forEach((p,i) => {
+    p.y -= p.v; p.x += p.d;
+    if (p.v > 2*devicePixelRatio) { p.v *= 0.97; p.a *= 0.985; }
+    cx.beginPath(); cx.arc(p.x,p.y,p.r,0,7);
+    cx.fillStyle = `rgba(140,255,26,${p.a})`; cx.shadowColor = "#8cff1a"; cx.shadowBlur = 12; cx.fill();
+    if (p.y < -10 || p.a < 0.03) parts[i] = parts.length > 60 ? null : nova(false);
+  });
+  parts = parts.filter(Boolean);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

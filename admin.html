@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vertex Mods • Painel do Estoque</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg"><div class="brilho"></div><div class="logo-fundo"></div><div class="grade"></div><div class="vinheta"></div></div>
+
+<main style="max-width:640px">
+  <img class="logo-topo" src="logo.png" alt="Vertex Mods" style="width:160px">
+
+  <section class="card">
+    <h1 style="font-size:26px">PAINEL DO ESTOQUE</h1>
+    <p class="sub" id="quem">Só o dono entra aqui</p>
+    <div style="margin-top:18px">
+      <button class="principal" id="btnLogin">ENTRAR COM GOOGLE</button>
+    </div>
+    <p class="msg" id="msg"></p>
+  </section>
+
+  <section class="card" id="painel" style="display:none">
+    <div class="infos" style="margin-bottom:18px">
+      <div class="info"><b id="sTotal">0</b><span>Total</span></div>
+      <div class="info"><b id="sUsadas">0</b><span>Entregues</span></div>
+      <div class="info"><b id="sLivres">0</b><span>Disponíveis</span></div>
+    </div>
+
+    <p class="rotulo" style="text-align:left;margin-bottom:8px">Cole as keys novas (uma por linha)</p>
+    <textarea id="novas" placeholder="PLT-XXXX-XXXX-XXXX"></textarea>
+    <div style="margin-top:12px"><button class="principal" id="btnAdd">ADICIONAR AO ESTOQUE</button></div>
+    <p class="msg" id="msg2"></p>
+
+    <p class="rotulo" style="text-align:left;margin-top:22px">Keys no estoque</p>
+    <div class="lista" id="lista"></div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, getDocs, collection, writeBatch, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const $ = (id) => document.getElementById(id);
+const msg = (el, t, erro) => { $(el).textContent = t || ""; $(el).className = "msg" + (erro ? " erro" : ""); };
+
+const cfg = window.FIREBASE_CONFIG || {};
+if (!cfg.apiKey || cfg.apiKey === "COLE_AQUI") { msg("msg", "Falta colar a configuração do Firebase no config.js", true); throw 0; }
+
+const app = initializeApp(cfg);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const contadorRef = doc(db, "estoque", "contador");
+let contador = { proximo: 0, total: 0 };
+
+$("btnLogin").onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => msg("msg", "Erro no login: " + e.code, true));
+
+onAuthStateChanged(auth, (u) => {
+  if (!u || u.isAnonymous) return;
+  $("quem").textContent = "Logado como " + u.email;
+  $("btnLogin").style.display = "none";
+  $("painel").style.display = "block";
+  onSnapshot(contadorRef, (s) => {
+    contador = s.data() || { proximo: 0, total: 0 };
+    $("sTotal").textContent = contador.total;
+    $("sUsadas").textContent = contador.proximo;
+    $("sLivres").textContent = Math.max(0, contador.total - contador.proximo);
+    carregarLista();
+  }, (e) => msg("msg", "Sem permissão. Esse e-mail não é o do dono (confira as regras).", true));
+});
+
+async function carregarLista(){
+  try {
+    const snap = await getDocs(collection(db, "keys"));
+    const itens = snap.docs.map(d => ({ n: Number(d.id), key: d.data().key })).sort((a,b) => a.n - b.n);
+    $("lista").innerHTML = itens.map(i =>
+      `<div><span>${i.n + 1}. ${i.key}</span><span class="tag ${i.n < contador.proximo ? "usada" : "livre"}">${i.n < contador.proximo ? "entregue" : "livre"}</span></div>`
+    ).join("") || "<div>Nenhuma key ainda.</div>";
+  } catch (e) { msg("msg2", "Não consegui listar: " + e.code, true); }
+}
+
+$("btnAdd").onclick = async () => {
+  const keys = [...new Set($("novas").value.split(/\s+/).map(s => s.trim()).filter(Boolean))];
+  if (!keys.length) return msg("msg2", "Cole pelo menos uma key.", true);
+  if (keys.length > 400) return msg("msg2", "Coloque no máximo 400 por vez.", true);
+  $("btnAdd").disabled = true;
+  try {
+    const atual = (await getDoc(contadorRef)).data() || { proximo: 0, total: 0 };
+    const b = writeBatch(db);
+    keys.forEach((k, i) => b.set(doc(db, "keys", String(atual.total + i)), { key: k }));
+    b.set(contadorRef, { proximo: atual.proximo, total: atual.total + keys.length });
+    await b.commit();
+    $("novas").value = "";
+    msg("msg2", `✅ ${keys.length} keys adicionadas!`);
+  } catch (e) {
+    msg("msg2", "Erro ao salvar: " + e.code, true);
+  }
+  $("btnAdd").disabled = false;
+};
+</script>
+</body>
+</html>
